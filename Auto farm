@@ -14,7 +14,7 @@ local queuetype = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxu
 if queuetype then
     pcall(function()
         queuetype([[
-            loadstring(game:HttpGet(" ton_lien_ici "))()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/tomikogamer17-ai/Auto-farm-mm2/refs/heads/main/Auto%20farm"))()
         ]])
     end)
 end
