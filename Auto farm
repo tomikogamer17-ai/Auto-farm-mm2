@@ -1,0 +1,652 @@
+-- Services Roblox
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+
+local player = Players.LocalPlayer
+
+-- Auto-exécuter le script lors d'un changement de serveur (Server Hop / Rejoin)
+local queuetype = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
+if queuetype then
+    pcall(function()
+        queuetype([[
+            loadstring(game:HttpGet(" ton_lien_ici "))()
+        ]])
+    end)
+end
+
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+-- Variables d'état
+local isCoinESPActive = false
+local isPlayerESPActive = false
+local isAutoFarmActive = false
+local farmToggleState = false
+
+local FlingActive = false
+local selectedPlayer = nil
+getgenv().OldPos = nil
+getgenv().FPDH = Workspace.FallenPartsDestroyHeight
+
+local coinsBlacklist = {}
+local currentTarget = nil
+local flySpeed = 20
+
+local playerRoles = {}
+local COLORS = {
+    Murderer = Color3.fromRGB(255, 50, 50),   -- Rouge Néon
+    Sheriff = Color3.fromRGB(0, 170, 255),   -- Bleu Néon
+    Hero = Color3.fromRGB(255, 235, 50),     -- Jaune Néon
+    Innocent = Color3.fromRGB(150, 255, 100) -- Vert Néon
+}
+
+local WEAPONS = {
+    knife = "Murderer", blade = "Murderer", sword = "Murderer",
+    gun = "Sheriff", revolver = "Sheriff", pistol = "Sheriff", sheriffgun = "Sheriff"
+}
+
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    humanoid = character:WaitForChild("Humanoid")
+    
+    if farmToggleState then
+        isAutoFarmActive = true
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- AUTO REJOIN SI KICK / DÉCONNEXION
+--------------------------------------------------------------------------------
+CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+    if child.Name == "ErrorPrompt" then
+        task.wait(1)
+        if #Players:GetPlayers() <= 1 then
+            TeleportService:Teleport(game.PlaceId, player)
+        else
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- SERVER HOP AUTOMATIQUE SI SEUL PENDANT 10 SECONDES
+--------------------------------------------------------------------------------
+local aloneTimer = 0
+task.spawn(function()
+    while task.wait(1) do
+        if #Players:GetPlayers() <= 1 then
+            aloneTimer = aloneTimer + 1
+            if aloneTimer >= 10 then
+                local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+                local success, result = pcall(function()
+                    return HttpService:JSONDecode(game:HttpGet(ApiUrl))
+                end)
+                
+                if success and result and result.data then
+                    local validServers = {}
+                    for _, s in ipairs(result.data) do
+                        if type(s) == "table" and s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing > 1 then
+                            table.insert(validServers, s.id)
+                        end
+                    end
+                    
+                    if #validServers > 0 then
+                        local randomServerId = validServers[math.random(1, #validServers)]
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, randomServerId, player)
+                    else
+                        TeleportService:Teleport(game.PlaceId, player)
+                    end
+                else
+                    TeleportService:Teleport(game.PlaceId, player)
+                end
+            end
+        else
+            aloneTimer = 0
+        end
+    end
+end)
+
+local function getCoinPart(obj)
+    if obj:IsA("BasePart") then
+        return obj
+    elseif obj:IsA("Model") then
+        if obj.PrimaryPart then return obj.PrimaryPart end
+        return obj:FindFirstChildWhichIsA("BasePart", true)
+    end
+    return nil
+end
+
+--------------------------------------------------------------------------------
+-- CHARGEMENT DE RAYFIELD UI (STYLE AMÉTHYSTE)
+--------------------------------------------------------------------------------
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "💎 MM2 Prestige Xeno - Amethyst Edition",
+    LoadingTitle = "Chargement Améthyste...",
+    LoadingSubtitle = "AutoFarm Lisse & ESP Rempli",
+    ConfigurationSaving = { Enabled = false },
+    KeySystem = false,
+    Theme = "Amethyst"
+})
+
+local TabFarm = Window:CreateTab("🔮 Candy AutoFarm", 4483362458)
+local TabESP = Window:CreateTab("👁️ ESP (Pièces & Joueurs)", 4483362458)
+
+--------------------------------------------------------------------------------
+-- ONGLET 1 : CANDY AUTOFARM
+--------------------------------------------------------------------------------
+TabFarm:CreateSection("⚡ Réglage Vitesse Strict")
+
+TabFarm:CreateSlider({
+    Name = "Vitesse du Fly",
+    Range = {10, 50},
+    Increment = 1,
+    CurrentValue = 20,
+    Flag = "SpeedSlider",
+    Callback = function(Value)
+        flySpeed = Value
+    end,
+})
+
+TabFarm:CreateSection("🔮 Activation AutoFarm (Limite 50 Exacte)")
+
+TabFarm:CreateToggle({
+    Name = "AutoFarm Smooth (-4 Studs ➔ TP 0 ➔ Reset 50)",
+    CurrentValue = false,
+    Flag = "FarmToggle",
+    Callback = function(Value)
+        farmToggleState = Value
+        isAutoFarmActive = Value
+        if not isAutoFarmActive then
+            if humanoid then humanoid.PlatformStand = false end
+            if rootPart then rootPart.AssemblyLinearVelocity = Vector3.zero end
+        end
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- ONGLET 2 : UNIFIÉ ESP (PIÈCES PLEINES + JOUEURS)
+--------------------------------------------------------------------------------
+
+TabESP:CreateSection("ESP Coin")
+
+local espEnabled = false
+local espObjects = {}
+
+local function addCoinESP(obj)
+    if not espEnabled then return end
+    if not obj:IsA("BasePart") then return end
+    if obj.Name:lower() ~= "coin_server" then return end
+    if espObjects[obj] then return end
+
+    local box = Instance.new("BoxHandleAdornment")
+    box.Name = "CoinESP_Box"
+    box.Adornee = obj
+    box.Size = obj.Size + Vector3.new(0.15, 0.15, 0.15)
+    box.Color3 = Color3.fromRGB(255, 220, 0)
+    box.Transparency = 0
+    box.AlwaysOnTop = true
+    box.ZIndex = 10
+    box.Visible = true
+    box.Parent = obj
+
+    espObjects[obj] = box
+end
+
+local function removeCoinESP()
+    for obj, box in pairs(espObjects) do
+        if box and box.Parent then
+            box:Destroy()
+        end
+        espObjects[obj] = nil
+    end
+end
+
+Workspace.DescendantAdded:Connect(function(obj)
+    task.defer(addCoinESP, obj)
+end)
+
+TabESP:CreateToggle({
+    Name = "ESP Pièces 3D (à travers les murs)",
+    CurrentValue = false,
+    Callback = function(Value)
+        espEnabled = Value
+
+        if espEnabled then
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                addCoinESP(obj)
+            end
+            print("[CoinESP] Activé")
+        else
+            removeCoinESP()
+            print("[CoinESP] Désactivé")
+        end
+    end
+})
+
+TabESP:CreateSection("🎭 ESP Rôles Joueurs MM2")
+
+TabESP:CreateToggle({
+    Name = "ESP Joueurs (Murderer / Sheriff / Innocent)",
+    CurrentValue = false,
+    Flag = "PlayerEspToggle",
+    Callback = function(Value)
+        isPlayerESPActive = Value
+        if not isPlayerESPActive then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Character and p.Character:FindFirstChild("RoleESP") then
+                    p.Character.RoleESP:Destroy()
+                end
+            end
+        end
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- NOCLIP PERMANENT & RÉACTIVATION À LA MORT
+--------------------------------------------------------------------------------
+RunService.Stepped:Connect(function()
+    if character then
+        local hum = character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health <= 0 then
+            if farmToggleState and not isAutoFarmActive then
+                isAutoFarmActive = true
+            end
+        end
+
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- LOGIQUE SKID FLING (5 FOIS)
+--------------------------------------------------------------------------------
+local function SkidFling(TargetPlayer)
+    if not TargetPlayer then return end
+    local Char = player.Character
+    local Hum = Char and Char:FindFirstChildOfClass("Humanoid")
+    local Root = Hum and Hum.RootPart
+    local TChar = TargetPlayer.Character
+    if not TChar then return end
+    
+    local THum = TChar:FindFirstChildOfClass("Humanoid")
+    local TRoot = THum and THum.RootPart
+    local THead = TChar:FindFirstChild("Head")
+    local Accessory = TChar:FindFirstChildOfClass("Accessory")
+    local Handle = Accessory and Accessory:FindFirstChild("Handle")
+    
+    if Char and Hum and Root then
+        if Root.Velocity.Magnitude < 50 then
+            getgenv().OldPos = Root.CFrame
+        end
+        
+        if THum and THum.Sit then return end
+        
+        if THead then
+            Workspace.CurrentCamera.CameraSubject = THead
+        elseif Handle then
+            Workspace.CurrentCamera.CameraSubject = Handle
+        elseif THum and TRoot then
+            Workspace.CurrentCamera.CameraSubject = THum
+        end
+        
+        if not TChar:FindFirstChildWhichIsA("BasePart") then return end
+        
+        local FPos = function(BasePart, Pos, Ang)
+            Root.CFrame = CFrame.new(BasePart.Position) * Pos * Ang
+            Char:SetPrimaryPartCFrame(CFrame.new(BasePart.Position) * Pos * Ang)
+            Root.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
+            Root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        end
+        
+        local SFBasePart = function(BasePart)
+            local TimeToWait = 2
+            local Time = tick()
+            local Angle = 0
+            repeat
+                if Root and THum and FlingActive and selectedPlayer == TargetPlayer.Name then
+                    if BasePart.Velocity.Magnitude < 50 then
+                        Angle = Angle + 100
+                        FPos(BasePart, CFrame.new(0, 1.5, 0) + THum.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0) + THum.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, 1.5, 0) + THum.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0) + THum.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, 1.5, 0) + THum.MoveDirection, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0) + THum.MoveDirection, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                    else
+                        FPos(BasePart, CFrame.new(0, 1.5, THum.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, -THum.WalkSpeed), CFrame.Angles(0, 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, 1.5, THum.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0))
+                        task.wait()
+                        
+                        FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(math.rad(90), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(0, 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(math.rad(90), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0), CFrame.Angles(0, 0, 0))
+                        task.wait()
+                    end
+                end
+            until Time + TimeToWait < tick() or not FlingActive or selectedPlayer ~= TargetPlayer.Name
+        end
+        
+        Workspace.FallenPartsDestroyHeight = 0/0
+        
+        local BV = Instance.new("BodyVelocity")
+        BV.Parent = Root
+        BV.Velocity = Vector3.new(0, 0, 0)
+        BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        
+        Hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+        
+        for i = 1, 5 do
+            if not TChar or not THum or THum.Health <= 0 then break end
+            if TRoot then
+                SFBasePart(TRoot)
+            elseif THead then
+                SFBasePart(THead)
+            elseif Handle then
+                SFBasePart(Handle)
+            end
+        end
+        
+        BV:Destroy()
+        Hum:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+        Workspace.CurrentCamera.CameraSubject = Hum
+        
+        if getgenv().OldPos then
+            repeat
+                Root.CFrame = getgenv().OldPos * CFrame.new(0, .5, 0)
+                Char:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, .5, 0))
+                Hum:ChangeState("GettingUp")
+                for _, part in pairs(Char:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new()
+                    end
+                end
+                task.wait()
+            until (Root.Position - getgenv().OldPos.p).Magnitude < 25 or FlingActive
+            Workspace.FallenPartsDestroyHeight = getgenv().FPDH
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- LOGIQUE ESP JOUEURS MM2
+--------------------------------------------------------------------------------
+local function applyHighlight(targetPlayer, role)
+    local targetChar = targetPlayer.Character
+    if not targetChar or not isPlayerESPActive then
+        if targetChar and targetChar:FindFirstChild("RoleESP") then
+            targetChar.RoleESP:Destroy()
+        end
+        return
+    end
+
+    local color = COLORS[role] or COLORS.Innocent
+    local h = targetChar:FindFirstChild("RoleESP") or Instance.new("Highlight")
+    h.Name = "RoleESP"
+    h.Parent = targetChar
+    h.FillColor = color
+    h.FillTransparency = 0.35
+    h.OutlineColor = color
+    h.OutlineTransparency = 0
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Enabled = true
+end
+
+local function checkInventory(targetPlayer)
+    if targetPlayer == player then return nil end
+    local targetChar = targetPlayer.Character
+    local backpack = targetPlayer:FindFirstChild("Backpack")
+
+    if targetChar then
+        for _, item in ipairs(targetChar:GetChildren()) do
+            if item:IsA("Tool") then
+                for keyword, role in pairs(WEAPONS) do
+                    if item.Name:lower():find(keyword:lower()) then return role end
+                end
+            end
+        end
+    end
+
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                for keyword, role in pairs(WEAPONS) do
+                    if item.Name:lower():find(keyword:lower()) then return role end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function getMyRole()
+    return playerRoles[player.Name] or checkInventory(player) or "Innocent"
+end
+
+local function findMurderer()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local role = playerRoles[p.Name] or checkInventory(p)
+            if role == "Murderer" then
+                return p
+            end
+        end
+    end
+    return nil
+end
+
+task.spawn(function()
+    while true do
+        if isPlayerESPActive then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p ~= player then
+                    local roleToAssign = playerRoles[p.Name] or checkInventory(p) or "Innocent"
+                    applyHighlight(p, roleToAssign)
+                end
+            end
+        end
+        task.wait(0.25)
+    end
+end)
+
+local gameplayFolder = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Gameplay")
+if gameplayFolder then
+    local showRoleSelectNew = gameplayFolder:FindFirstChild("ShowRoleSelectNew")
+    if showRoleSelectNew and showRoleSelectNew:IsA("RemoteEvent") then
+        showRoleSelectNew.OnClientEvent:Connect(function(data)
+            if type(data) == "table" and data.SelectedRole then
+                playerRoles[player.Name] = data.SelectedRole
+                applyHighlight(player, data.SelectedRole)
+            end
+        end)
+    end
+
+    local coinCollectedRemote = gameplayFolder:FindFirstChild("CoinCollected")
+    if coinCollectedRemote and coinCollectedRemote:IsA("RemoteEvent") then
+        coinCollectedRemote.OnClientEvent:Connect(function(coinType, currentCoins, maxCoins)
+            if currentCoins >= maxCoins or currentCoins >= 50 then
+                local myRole = getMyRole()
+
+                if myRole == "Murderer" then
+                    if character and character:FindFirstChildOfClass("Humanoid") then
+                        character:BreakJoints()
+                    end
+                else
+                    isAutoFarmActive = false
+                    if humanoid then humanoid.PlatformStand = false end
+                    if rootPart then rootPart.AssemblyLinearVelocity = Vector3.zero end
+
+                    if rootPart then
+                        rootPart.CFrame = CFrame.new(513, 461, 37)
+                        task.wait(0.2)
+                    end
+
+                    local murderer = findMurderer()
+                    if murderer then
+                        FlingActive = true
+                        selectedPlayer = murderer.Name
+                        SkidFling(murderer)
+                        FlingActive = false
+                        selectedPlayer = nil
+                    end
+
+                    if farmToggleState then
+                        isAutoFarmActive = true
+                    end
+                end
+            end
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- GESTION DES PIÈCES ET ESP
+--------------------------------------------------------------------------------
+local function blacklisterCoin(coinObj)
+    if coinObj and not coinsBlacklist[coinObj] then
+        coinsBlacklist[coinObj] = true
+        if currentTarget and currentTarget.Object == coinObj then
+            currentTarget = nil
+        end
+        local targetPart = getCoinPart(coinObj)
+        if targetPart then
+            local box = targetPart:FindFirstChild("CandyESP_Box")
+            local hl = targetPart:FindFirstChild("CandyESP_HL")
+            if box then box:Destroy() end
+            if hl then hl:Destroy() end
+        end
+    end
+end
+
+Workspace.DescendantRemoving:Connect(function(obj)
+    if string.lower(obj.Name) == "coin_server" then
+        coinsBlacklist[obj] = true
+    end
+end)
+
+local function appliquerCoinESP(obj)
+    if string.lower(obj.Name) == "coin_server" and not coinsBlacklist[obj] then
+        local targetPart = getCoinPart(obj)
+        if targetPart and isCoinESPActive then
+            if not targetPart:FindFirstChild("CandyESP_Box") then
+                local box = Instance.new("SelectionBox")
+                box.Name = "CandyESP_Box"
+                box.Color3 = Color3.fromRGB(255, 215, 0)
+                box.LineThickness = 0.08
+                box.Adornee = targetPart
+                box.Parent = targetPart
+            end
+            if not targetPart:FindFirstChild("CandyESP_HL") then
+                local hl = Instance.new("Highlight")
+                hl.Name = "CandyESP_HL"
+                hl.Adornee = targetPart
+                hl.FillColor = Color3.fromRGB(255, 215, 0)
+                hl.FillTransparency = 0.4
+                hl.OutlineColor = Color3.fromRGB(255, 255, 0)
+                hl.OutlineTransparency = 0
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = targetPart
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if isCoinESPActive then
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if string.lower(obj.Name) == "coin_server" then
+                    appliquerCoinESP(obj)
+                end
+            end
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- RECHERCHE DU MEILLEUR COIN
+--------------------------------------------------------------------------------
+local function chercherMeilleurCoin()
+    logiqueCoinProche = nil
+    local distMin = math.huge
+
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if string.lower(obj.Name) == "coin_server" and not coinsBlacklist[obj] and obj:IsDescendantOf(Workspace) then
+            local targetPart = getCoinPart(obj)
+            if targetPart and rootPart then
+                local dist = (rootPart.Position - targetPart.Position).Magnitude
+                if dist < distMin then
+                    distMin = dist
+                    logiqueCoinProche = {Object = obj, Part = targetPart}
+                end
+            end
+        end
+    end
+    return logiqueCoinProche
+end
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if isAutoFarmActive then
+            currentTarget = chercherMeilleurCoin()
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- AUTOFARM LERP ULTRA-STABLE (-4 STUDS ➔ TP 0 STUD)
+--------------------------------------------------------------------------------
+RunService.Heartbeat:Connect(function(dt)
+    if not isAutoFarmActive or not character or not rootPart or not humanoid then return end
+
+    if currentTarget and currentTarget.Part and currentTarget.Part.Parent then
+        humanoid.PlatformStand = true
+
+        local coinPos = currentTarget.Part.Position
+        local currentPos = rootPart.Position
+
+        local targetBelowPos = Vector3.new(coinPos.X, coinPos.Y - 4, coinPos.Z)
+        local distanceVector = targetBelowPos - currentPos
+        local dist2D = distanceVector.Magnitude
+
+        if dist2D <= 1.5 then
+            rootPart.CFrame = CFrame.new(coinPos)
+            blacklisterCoin(currentTarget.Object)
+            rootPart.AssemblyLinearVelocity = Vector3.zero
+        else
+            local stepDistance = flySpeed * dt
+            local alpha = math.min(stepDistance / dist2D, 1)
+
+            rootPart.CFrame = rootPart.CFrame:Lerp(CFrame.new(targetBelowPos), alpha)
+            rootPart.AssemblyLinearVelocity = Vector3.zero
+        end
+    else
+        humanoid.PlatformStand = false
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+    end
+end)
