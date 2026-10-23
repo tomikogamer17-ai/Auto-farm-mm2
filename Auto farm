@@ -1,21 +1,28 @@
--- Services Roblox
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
-local CoreGui = game:GetService("CoreGui")
-local UserInputService = game:GetService("UserInputService")
-local VirtualUser = game:GetService("VirtualUser")
+-- Services Roblox (Sécurisés via Cloneref si disponible)
+local getService = function(service)
+    return cloneref and cloneref(game:GetService(service)) or game:GetService(service)
+end
+
+local Players = getService("Players")
+local ReplicatedStorage = getService("ReplicatedStorage")
+local RunService = getService("RunService")
+local Workspace = getService("Workspace")
+local TeleportService = getService("TeleportService")
+local HttpService = getService("HttpService")
+local CoreGui = getService("CoreGui")
+local UserInputService = getService("UserInputService")
+local VirtualUser = getService("VirtualUser")
 
 local player = Players.LocalPlayer
 
--- Auto-exécuter le script lors d'un changement de serveur (Server Hop / Rejoin)
+--------------------------------------------------------------------------------
+-- PERSISTANCE ANTI-DÉTECTION À TRAVERS LES TÉLÉPORTATIONS
+--------------------------------------------------------------------------------
 local queuetype = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
 if queuetype then
     pcall(function()
         queuetype([[
+            task.wait(1)
             loadstring(game:HttpGet("https://raw.githubusercontent.com/tomikogamer17-ai/Auto-farm-mm2/refs/heads/main/Auto%20farm"))()
         ]])
     end)
@@ -64,50 +71,16 @@ player.Idled:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- FONCTION SERVEUR HOP
---------------------------------------------------------------------------------
-local function serverHop()
-    print("[Server Hop] Recherche d'un nouveau serveur public...")
-    local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
-    local success, result = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(ApiUrl))
-    end)
-    
-    if success and result and result.data then
-        local validServers = {}
-        for _, s in ipairs(result.data) do
-            if type(s) == "table" and s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing > 1 then
-                table.insert(validServers, s.id)
-            end
-        end
-        
-        if #validServers > 0 then
-            local randomServerId = validServers[math.random(1, #validServers)]
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, randomServerId, player)
-        else
-            TeleportService:Teleport(game.PlaceId, player)
-        end
-    else
-        TeleportService:Teleport(game.PlaceId, player)
-    end
-end
-
---------------------------------------------------------------------------------
--- REJOIN AUTOMATIQUE SUR UN AUTRE SERVEUR SI KICK OU FERMETURE
---------------------------------------------------------------------------------
-CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
-    if child.Name == "ErrorPrompt" then
-        task.wait(1)
-        serverHop()
-    end
-end)
-
---------------------------------------------------------------------------------
--- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE (UI)
+-- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE (UI SÉCURISÉE)
 --------------------------------------------------------------------------------
 local MainGui = {}
 
-MainGui["1"] = Instance.new("ScreenGui", CoreGui)
+MainGui["1"] = Instance.new("ScreenGui")
+if gethui then
+    MainGui["1"].Parent = gethui()
+else
+    MainGui["1"].Parent = CoreGui
+end
 MainGui["1"]["IgnoreGuiInset"] = true
 MainGui["1"]["DisplayOrder"] = 999999999
 MainGui["1"]["ScreenInsets"] = Enum.ScreenInsets.DeviceSafeInsets
@@ -162,6 +135,17 @@ MainGui["5"]["Text"] = "00:00"
 MainGui["5"]["Name"] = "Timer"
 MainGui["5"]["Position"] = UDim2.new(0.612, 0, 0.775, 0)
 
+-- Affichage de la Raison du Server Hop sur l'UI
+local ReasonLabel = Instance.new("TextLabel", MainGui["2"])
+ReasonLabel["Name"] = "HopReason"
+ReasonLabel["Size"] = UDim2.new(0, 400, 0, 20)
+ReasonLabel["Position"] = UDim2.new(0.1, 0, 0.92, 0)
+ReasonLabel["BackgroundTransparency"] = 1
+ReasonLabel["Font"] = Enum.Font.GothamMedium
+ReasonLabel["TextSize"] = 14
+ReasonLabel["TextColor3"] = Color3.fromRGB(255, 170, 0)
+ReasonLabel["Text"] = ""
+
 -- Système Drag & Drop
 local Dragging = false
 local DragStart, StartPos
@@ -193,7 +177,54 @@ UserInputService.InputChanged:Connect(function(Input)
 end)
 
 --------------------------------------------------------------------------------
--- BOUCLE DE STATISTIQUES & DÉTECTION DES AUTRES FLYERS / TIMERS
+-- FONCTION SERVEUR HOP AVEC LOGS DE RAISON
+--------------------------------------------------------------------------------
+local function serverHop(raison)
+    local reasonText = raison or "Changement de serveur manuel"
+    print("=========================================")
+    print("[Server Hop] Raison: " .. reasonText)
+    print("=========================================")
+    
+    if ReasonLabel then
+        ReasonLabel.Text = "Server Hop: " .. reasonText
+    end
+
+    local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+    local success, result = pcall(function()
+        return HttpService:JSONDecode(game:HttpGet(ApiUrl))
+    end)
+    
+    if success and result and result.data then
+        local validServers = {}
+        for _, s in ipairs(result.data) do
+            if type(s) == "table" and s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing > 1 then
+                table.insert(validServers, s.id)
+            end
+        end
+        
+        if #validServers > 0 then
+            local randomServerId = validServers[math.random(1, #validServers)]
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, randomServerId, player)
+        else
+            TeleportService:Teleport(game.PlaceId, player)
+        end
+    else
+        TeleportService:Teleport(game.PlaceId, player)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- REJOIN AUTOMATIQUE SUR UN AUTRE SERVEUR SI KICK OU FERMETURE
+--------------------------------------------------------------------------------
+CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+    if child.Name == "ErrorPrompt" then
+        task.wait(1)
+        serverHop("Erreur/Kick détecté (Reconnexion auto)")
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- BOUCLE DE STATISTIQUES & TIMERS
 --------------------------------------------------------------------------------
 local aloneTimer = 0
 
@@ -218,36 +249,19 @@ task.spawn(function()
             MainGui["4"].Text = "0"
         end
 
+        -- Server Hop si pas de pièce depuis +180 secondes
         if (tick() - lastCoinSpawnTime) >= 180 then
-            print("[Timer Inactivité] Aucune pièce depuis 180s. Server Hop...")
-            serverHop()
+            serverHop("Aucune pièce détectée pendant 180s")
         end
 
+        -- Server Hop si seul pendant 10 secondes
         if #Players:GetPlayers() <= 1 then
             aloneTimer = aloneTimer + 1
             if aloneTimer >= 10 then
-                serverHop()
+                serverHop("Seul sur le serveur pendant 10s")
             end
         else
             aloneTimer = 0
-        end
-
-        local flyersCount = 0
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= player and p.Character then
-                local pRoot = p.Character:FindFirstChild("HumanoidRootPart")
-                local pHum = p.Character:FindFirstChildOfClass("Humanoid")
-                if pRoot and pHum then
-                    if pRoot.AssemblyLinearVelocity.Magnitude > 35 or pHum.PlatformStand then
-                        flyersCount = flyersCount + 1
-                    end
-                end
-            end
-        end
-
-        if flyersCount >= 2 then
-            print("[Anti-Concurrence] +2 Flyers détectés (" .. flyersCount .. "). Server Hop...")
-            serverHop()
         end
     end
 end)
@@ -476,7 +490,6 @@ if gameplayFolder then
                 local amIMurderer = isPlayerMurderer(player)
 
                 if amIMurderer then
-                    -- Reset instantané du joueur Murderer
                     isAutoFarmActive = false
                     if character then
                         local hum = character:FindFirstChildOfClass("Humanoid")
