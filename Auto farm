@@ -35,23 +35,16 @@ getgenv().FPDH = Workspace.FallenPartsDestroyHeight
 local coinsBlacklist = {}
 local currentTarget = nil
 local flySpeed = 20
-local isCollecting = false -- Bloque le mouvement pendant les 50ms de collecte
+local isCollecting = false
 
 -- Statistiques, Compteurs & Timers
 local totalCoinsCollected = 0
 local startTime = tick()
-local lastCoinSpawnTime = tick() -- Timer d'inactivité des pièces
+local lastCoinSpawnTime = tick()
 
 local playerRoles = {}
-local COLORS = {
-    Murderer = Color3.fromRGB(255, 50, 50),
-    Sheriff = Color3.fromRGB(0, 170, 255),
-    Hero = Color3.fromRGB(255, 235, 50),
-    Innocent = Color3.fromRGB(150, 255, 100)
-}
-
 local WEAPONS = {
-    knife = "Murderer", blade = "Murderer", sword = "Murderer",
+    knife = "Murderer", blade = "Murderer", sword = "Murderer", dagger = "Murderer",
     gun = "Sheriff", revolver = "Sheriff", pistol = "Sheriff", sheriffgun = "Sheriff"
 }
 
@@ -204,7 +197,6 @@ end)
 --------------------------------------------------------------------------------
 local aloneTimer = 0
 
--- Reset du timer d'inactivité si une pièce apparaît dans Workspace
 Workspace.DescendantAdded:Connect(function(obj)
     if string.lower(obj.Name) == "coin_server" then
         lastCoinSpawnTime = tick()
@@ -226,13 +218,11 @@ task.spawn(function()
             MainGui["4"].Text = "0"
         end
 
-        -- 1. Server Hop si pas de pièce depuis +180 secondes
         if (tick() - lastCoinSpawnTime) >= 180 then
             print("[Timer Inactivité] Aucune pièce depuis 180s. Server Hop...")
             serverHop()
         end
 
-        -- 2. Server Hop si seul pendant 10 secondes
         if #Players:GetPlayers() <= 1 then
             aloneTimer = aloneTimer + 1
             if aloneTimer >= 10 then
@@ -242,7 +232,6 @@ task.spawn(function()
             aloneTimer = 0
         end
 
-        -- 3. Détection de 2+ Flyers/Farmers concurents
         local flyersCount = 0
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= player and p.Character then
@@ -417,10 +406,9 @@ local function SkidFling(TargetPlayer)
 end
 
 --------------------------------------------------------------------------------
--- LOGIQUE RÔLES JOUEURS MM2
+-- DÉTECTION RIGOUREUSE DU RÔLE MURDERER & RESET
 --------------------------------------------------------------------------------
 local function checkInventory(targetPlayer)
-    if targetPlayer == player then return nil end
     local targetChar = targetPlayer.Character
     local backpack = targetPlayer:FindFirstChild("Backpack")
 
@@ -446,15 +434,20 @@ local function checkInventory(targetPlayer)
     return nil
 end
 
-local function getMyRole()
-    return playerRoles[player.Name] or checkInventory(player) or "Innocent"
+local function isPlayerMurderer(targetPlayer)
+    if playerRoles[targetPlayer.Name] == "Murderer" then
+        return true
+    end
+    if checkInventory(targetPlayer) == "Murderer" then
+        return true
+    end
+    return false
 end
 
 local function findMurderer()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= player and p.Character then
-            local role = playerRoles[p.Name] or checkInventory(p)
-            if role == "Murderer" then
+            if isPlayerMurderer(p) then
                 return p
             end
         end
@@ -477,13 +470,17 @@ if gameplayFolder then
     if coinCollectedRemote and coinCollectedRemote:IsA("RemoteEvent") then
         coinCollectedRemote.OnClientEvent:Connect(function(coinType, currentCoins, maxCoins)
             totalCoinsCollected = totalCoinsCollected + 1
-            lastCoinSpawnTime = tick() -- Réinitialise le timer d'inactivité lorsqu'on collecte
+            lastCoinSpawnTime = tick()
 
             if currentCoins >= maxCoins or currentCoins >= 50 then
-                local myRole = getMyRole()
+                local amIMurderer = isPlayerMurderer(player)
 
-                if myRole == "Murderer" then
-                    if character and character:FindFirstChildOfClass("Humanoid") then
+                if amIMurderer then
+                    -- Reset instantané du joueur Murderer
+                    isAutoFarmActive = false
+                    if character then
+                        local hum = character:FindFirstChildOfClass("Humanoid")
+                        if hum then hum.Health = 0 end
                         character:BreakJoints()
                     end
                 else
@@ -579,16 +576,13 @@ RunService.Heartbeat:Connect(function(dt)
         if dist2D <= 1.5 then
             isCollecting = true
             
-            -- 1. Se téléporte directement sur la pièce (0 stud)
             rootPart.CFrame = CFrame.new(coinPos)
             rootPart.AssemblyLinearVelocity = Vector3.zero
             
-            -- 2. Pause exacte de 50 ms sur la pièce pour forcer la prise par le serveur
             task.wait(0.05)
             
             blacklisterCoin(currentTarget.Object)
 
-            -- 3. Repasse à -4 studs sous la position
             if rootPart then
                 rootPart.CFrame = CFrame.new(targetBelowPos)
                 rootPart.AssemblyLinearVelocity = Vector3.zero
@@ -596,7 +590,6 @@ RunService.Heartbeat:Connect(function(dt)
             
             isCollecting = false
         else
-            -- Déplacement fluide vers -4 studs
             local stepDistance = flySpeed * dt
             local alpha = math.min(stepDistance / dist2D, 1)
 
