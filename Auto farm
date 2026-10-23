@@ -26,7 +26,7 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 local humanoid = character:WaitForChild("Humanoid")
 
 -- Variables d'état
-local isAutoFarmActive = true -- Tout s'active automatiquement
+local isAutoFarmActive = true
 local FlingActive = false
 local selectedPlayer = nil
 getgenv().OldPos = nil
@@ -35,10 +35,12 @@ getgenv().FPDH = Workspace.FallenPartsDestroyHeight
 local coinsBlacklist = {}
 local currentTarget = nil
 local flySpeed = 20
+local isCollecting = false -- Bloque le mouvement pendant les 50ms de collecte
 
--- Statistiques et Compteurs
+-- Statistiques, Compteurs & Timers
 local totalCoinsCollected = 0
 local startTime = tick()
+local lastCoinSpawnTime = tick() -- Timer d'inactivité des pièces
 
 local playerRoles = {}
 local COLORS = {
@@ -69,7 +71,46 @@ player.Idled:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- CRÉATION ET GESTION DE TON INTERFACE GRAPHIQUE (UI)
+-- FONCTION SERVEUR HOP
+--------------------------------------------------------------------------------
+local function serverHop()
+    print("[Server Hop] Recherche d'un nouveau serveur public...")
+    local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+    local success, result = pcall(function()
+        return HttpService:JSONDecode(game:HttpGet(ApiUrl))
+    end)
+    
+    if success and result and result.data then
+        local validServers = {}
+        for _, s in ipairs(result.data) do
+            if type(s) == "table" and s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing > 1 then
+                table.insert(validServers, s.id)
+            end
+        end
+        
+        if #validServers > 0 then
+            local randomServerId = validServers[math.random(1, #validServers)]
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, randomServerId, player)
+        else
+            TeleportService:Teleport(game.PlaceId, player)
+        end
+    else
+        TeleportService:Teleport(game.PlaceId, player)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- REJOIN AUTOMATIQUE SUR UN AUTRE SERVEUR SI KICK OU FERMETURE
+--------------------------------------------------------------------------------
+CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+    if child.Name == "ErrorPrompt" then
+        task.wait(1)
+        serverHop()
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE (UI)
 --------------------------------------------------------------------------------
 local MainGui = {}
 
@@ -128,7 +169,7 @@ MainGui["5"]["Text"] = "00:00"
 MainGui["5"]["Name"] = "Timer"
 MainGui["5"]["Position"] = UDim2.new(0.612, 0, 0.775, 0)
 
--- Système de déplacement (Drag & Drop) de la fenêtre
+-- Système Drag & Drop
 local Dragging = false
 local DragStart, StartPos
 
@@ -159,78 +200,65 @@ UserInputService.InputChanged:Connect(function(Input)
 end)
 
 --------------------------------------------------------------------------------
--- BOUCLE DE MISE À JOUR DES STATISTIQUES (UI)
+-- BOUCLE DE STATISTIQUES & DÉTECTION DES AUTRES FLYERS / TIMERS
 --------------------------------------------------------------------------------
+local aloneTimer = 0
+
+-- Reset du timer d'inactivité si une pièce apparaît dans Workspace
+Workspace.DescendantAdded:Connect(function(obj)
+    if string.lower(obj.Name) == "coin_server" then
+        lastCoinSpawnTime = tick()
+    end
+end)
+
 task.spawn(function()
-    while task.wait(0.5) do
+    while task.wait(1) do
         local elapsedSeconds = tick() - startTime
-        
-        -- Mise à jour du Timer (MM:SS)
         local minutes = math.floor(elapsedSeconds / 60)
         local seconds = math.floor(elapsedSeconds % 60)
         MainGui["5"].Text = string.format("%02d:%02d", minutes, seconds)
-        
-        -- Mise à jour des Pièces Collectées
         MainGui["3"].Text = tostring(totalCoinsCollected)
         
-        -- Calcul des Pièces par Heure (Coins Per Hour)
         if elapsedSeconds > 0 then
             local coinsPerHour = math.floor((totalCoinsCollected / elapsedSeconds) * 3600)
             MainGui["4"].Text = tostring(coinsPerHour)
         else
             MainGui["4"].Text = "0"
         end
-    end
-end)
 
---------------------------------------------------------------------------------
--- AUTO REJOIN SI KICK / DÉCONNEXION
---------------------------------------------------------------------------------
-CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
-    if child.Name == "ErrorPrompt" then
-        task.wait(1)
-        if #Players:GetPlayers() <= 1 then
-            TeleportService:Teleport(game.PlaceId, player)
-        else
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+        -- 1. Server Hop si pas de pièce depuis +180 secondes
+        if (tick() - lastCoinSpawnTime) >= 180 then
+            print("[Timer Inactivité] Aucune pièce depuis 180s. Server Hop...")
+            serverHop()
         end
-    end
-end)
 
---------------------------------------------------------------------------------
--- SERVER HOP AUTOMATIQUE SI SEUL PENDANT 10 SECONDES
---------------------------------------------------------------------------------
-local aloneTimer = 0
-task.spawn(function()
-    while task.wait(1) do
+        -- 2. Server Hop si seul pendant 10 secondes
         if #Players:GetPlayers() <= 1 then
             aloneTimer = aloneTimer + 1
             if aloneTimer >= 10 then
-                local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
-                local success, result = pcall(function()
-                    return HttpService:JSONDecode(game:HttpGet(ApiUrl))
-                end)
-                
-                if success and result and result.data then
-                    local validServers = {}
-                    for _, s in ipairs(result.data) do
-                        if type(s) == "table" and s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing > 1 then
-                            table.insert(validServers, s.id)
-                        end
-                    end
-                    
-                    if #validServers > 0 then
-                        local randomServerId = validServers[math.random(1, #validServers)]
-                        TeleportService:TeleportToPlaceInstance(game.PlaceId, randomServerId, player)
-                    else
-                        TeleportService:Teleport(game.PlaceId, player)
-                    end
-                else
-                    TeleportService:Teleport(game.PlaceId, player)
-                end
+                serverHop()
             end
         else
             aloneTimer = 0
+        end
+
+        -- 3. Détection de 2+ Flyers/Farmers concurents
+        local flyersCount = 0
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and p.Character then
+                local pRoot = p.Character:FindFirstChild("HumanoidRootPart")
+                local pHum = p.Character:FindFirstChildOfClass("Humanoid")
+                if pRoot and pHum then
+                    if pRoot.AssemblyLinearVelocity.Magnitude > 35 or pHum.PlatformStand then
+                        flyersCount = flyersCount + 1
+                    end
+                end
+            end
+        end
+
+        if flyersCount >= 2 then
+            print("[Anti-Concurrence] +2 Flyers détectés (" .. flyersCount .. "). Server Hop...")
+            serverHop()
         end
     end
 end)
@@ -266,7 +294,7 @@ RunService.Stepped:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- LOGIQUE SKID FLING (5 FOIS)
+-- LOGIQUE SKID FLING (RÉPÉTÉ 10 FOIS)
 --------------------------------------------------------------------------------
 local function SkidFling(TargetPlayer)
     if not TargetPlayer then return end
@@ -356,7 +384,7 @@ local function SkidFling(TargetPlayer)
         
         Hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
         
-        for i = 1, 5 do
+        for i = 1, 10 do
             if not TChar or not THum or THum.Health <= 0 then break end
             if TRoot then
                 SFBasePart(TRoot)
@@ -448,8 +476,8 @@ if gameplayFolder then
     local coinCollectedRemote = gameplayFolder:FindFirstChild("CoinCollected")
     if coinCollectedRemote and coinCollectedRemote:IsA("RemoteEvent") then
         coinCollectedRemote.OnClientEvent:Connect(function(coinType, currentCoins, maxCoins)
-            -- Incrémente le compteur de pièces pour ton interface
             totalCoinsCollected = totalCoinsCollected + 1
+            lastCoinSpawnTime = tick() -- Réinitialise le timer d'inactivité lorsqu'on collecte
 
             if currentCoins >= maxCoins or currentCoins >= 50 then
                 local myRole = getMyRole()
@@ -533,10 +561,10 @@ task.spawn(function()
 end)
 
 --------------------------------------------------------------------------------
--- AUTOFARM LERP STABLE (-4 STUDS ➔ TP 0 STUD)
+-- AUTOFARM EN LIGNE DROITE (-4 STUDS ➔ TP 0 STUD + PAUSE 50MS ➔ -4 STUDS)
 --------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function(dt)
-    if not isAutoFarmActive or not character or not rootPart or not humanoid then return end
+    if not isAutoFarmActive or isCollecting or not character or not rootPart or not humanoid then return end
 
     if currentTarget and currentTarget.Part and currentTarget.Part.Parent then
         humanoid.PlatformStand = true
@@ -549,10 +577,26 @@ RunService.Heartbeat:Connect(function(dt)
         local dist2D = distanceVector.Magnitude
 
         if dist2D <= 1.5 then
+            isCollecting = true
+            
+            -- 1. Se téléporte directement sur la pièce (0 stud)
             rootPart.CFrame = CFrame.new(coinPos)
-            blacklisterCoin(currentTarget.Object)
             rootPart.AssemblyLinearVelocity = Vector3.zero
+            
+            -- 2. Pause exacte de 50 ms sur la pièce pour forcer la prise par le serveur
+            task.wait(0.05)
+            
+            blacklisterCoin(currentTarget.Object)
+
+            -- 3. Repasse à -4 studs sous la position
+            if rootPart then
+                rootPart.CFrame = CFrame.new(targetBelowPos)
+                rootPart.AssemblyLinearVelocity = Vector3.zero
+            end
+            
+            isCollecting = false
         else
+            -- Déplacement fluide vers -4 studs
             local stepDistance = flySpeed * dt
             local alpha = math.min(stepDistance / dist2D, 1)
 
