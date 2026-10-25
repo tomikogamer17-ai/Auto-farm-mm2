@@ -33,6 +33,7 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 local humanoid = character:WaitForChild("Humanoid")
 
 -- Variables d'état
+local isAutoFarmActive = true
 local FlingActive = false
 local selectedPlayer = nil
 getgenv().OldPos = nil
@@ -54,14 +55,12 @@ local WEAPONS = {
     gun = "Sheriff", revolver = "Sheriff", pistol = "Sheriff", sheriffgun = "Sheriff"
 }
 
-local function setupCharacter(newChar)
+player.CharacterAdded:Connect(function(newChar)
     character = newChar
     rootPart = character:WaitForChild("HumanoidRootPart")
     humanoid = character:WaitForChild("Humanoid")
-    isCollecting = false
-end
-
-player.CharacterAdded:Connect(setupCharacter)
+    isAutoFarmActive = true
+end)
 
 --------------------------------------------------------------------------------
 -- ANTI-AFK INTÉGRÉ
@@ -136,6 +135,17 @@ MainGui["5"]["Text"] = "00:00"
 MainGui["5"]["Name"] = "Timer"
 MainGui["5"]["Position"] = UDim2.new(0.612, 0, 0.775, 0)
 
+-- Affichage de la Raison du Server Hop sur l'UI
+local ReasonLabel = Instance.new("TextLabel", MainGui["2"])
+ReasonLabel["Name"] = "HopReason"
+ReasonLabel["Size"] = UDim2.new(0, 400, 0, 20)
+ReasonLabel["Position"] = UDim2.new(0.1, 0, 0.92, 0)
+ReasonLabel["BackgroundTransparency"] = 1
+ReasonLabel["Font"] = Enum.Font.GothamMedium
+ReasonLabel["TextSize"] = 14
+ReasonLabel["TextColor3"] = Color3.fromRGB(255, 170, 0)
+ReasonLabel["Text"] = ""
+
 -- Système Drag & Drop
 local Dragging = false
 local DragStart, StartPos
@@ -167,53 +177,17 @@ UserInputService.InputChanged:Connect(function(Input)
 end)
 
 --------------------------------------------------------------------------------
--- SYSTEME DE NOTIFICATION BAS À DROITE (REASON HOP)
---------------------------------------------------------------------------------
-local function createNotification(reasonText)
-    local notifyFrame = Instance.new("Frame")
-    notifyFrame.Name = "NotifyFrame"
-    notifyFrame.Size = UDim2.new(0, 280, 0, 60)
-    notifyFrame.Position = UDim2.new(1, -290, 1, -80)
-    notifyFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-    notifyFrame.BorderSizePixel = 0
-    notifyFrame.Parent = MainGui["1"]
-
-    local corner = Instance.new("UICorner", notifyFrame)
-    corner.CornerRadius = UDim.new(0, 8)
-
-    local stroke = Instance.new("UIStroke", notifyFrame)
-    stroke.Color = Color3.fromRGB(138, 43, 226)
-    stroke.Thickness = 1.5
-
-    local title = Instance.new("TextLabel", notifyFrame)
-    title.Size = UDim2.new(1, -10, 0, 20)
-    title.Position = UDim2.new(0, 10, 0, 5)
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 13
-    title.TextColor3 = Color3.fromRGB(180, 100, 255)
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "🔮 SERVER HOP"
-
-    local body = Instance.new("TextLabel", notifyFrame)
-    body.Size = UDim2.new(1, -10, 0, 30)
-    body.Position = UDim2.new(0, 10, 0, 25)
-    body.BackgroundTransparency = 1
-    body.Font = Enum.Font.Gotham
-    body.TextSize = 12
-    body.TextColor3 = Color3.fromRGB(255, 255, 255)
-    body.TextXAlignment = Enum.TextXAlignment.Left
-    body.TextWrapped = true
-    body.Text = reasonText
-end
-
---------------------------------------------------------------------------------
--- FONCTION SERVEUR HOP AVEC NOTIFICATION
+-- FONCTION SERVEUR HOP AVEC LOGS DE RAISON
 --------------------------------------------------------------------------------
 local function serverHop(raison)
-    local reasonText = raison or "Changement manuel"
-    createNotification(reasonText)
-    print("[Server Hop] " .. reasonText)
+    local reasonText = raison or "Changement de serveur manuel"
+    print("=========================================")
+    print("[Server Hop] Raison: " .. reasonText)
+    print("=========================================")
+    
+    if ReasonLabel then
+        ReasonLabel.Text = "Server Hop: " .. reasonText
+    end
 
     local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
     local success, result = pcall(function()
@@ -245,7 +219,7 @@ end
 CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
     if child.Name == "ErrorPrompt" then
         task.wait(1)
-        serverHop("Erreur/Kick du serveur")
+        serverHop("Erreur/Kick détecté (Reconnexion auto)")
     end
 end)
 
@@ -277,14 +251,14 @@ task.spawn(function()
 
         -- Server Hop si pas de pièce depuis +180 secondes
         if (tick() - lastCoinSpawnTime) >= 180 then
-            serverHop("Aucune pièce depuis 180s")
+            serverHop("Aucune pièce détectée pendant 180s")
         end
 
         -- Server Hop si seul pendant 10 secondes
         if #Players:GetPlayers() <= 1 then
             aloneTimer = aloneTimer + 1
             if aloneTimer >= 10 then
-                serverHop("Seul sur le serveur (10s)")
+                serverHop("Seul sur le serveur pendant 10s")
             end
         else
             aloneTimer = 0
@@ -303,10 +277,17 @@ local function getCoinPart(obj)
 end
 
 --------------------------------------------------------------------------------
--- NOCLIP SÉCURISÉ (SEULEMENT PENDANT LE DEPLACEMENT COIN)
+-- NOCLIP PERMANENT & RÉACTIVATION À LA MORT
 --------------------------------------------------------------------------------
 RunService.Stepped:Connect(function()
-    if character and currentTarget and currentTarget.Part then
+    if character then
+        local hum = character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health <= 0 then
+            if not isAutoFarmActive then
+                isAutoFarmActive = true
+            end
+        end
+
         for _, part in ipairs(character:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -509,12 +490,14 @@ if gameplayFolder then
                 local amIMurderer = isPlayerMurderer(player)
 
                 if amIMurderer then
+                    isAutoFarmActive = false
                     if character then
                         local hum = character:FindFirstChildOfClass("Humanoid")
                         if hum then hum.Health = 0 end
                         character:BreakJoints()
                     end
                 else
+                    isAutoFarmActive = false
                     if humanoid then humanoid.PlatformStand = false end
                     if rootPart then rootPart.AssemblyLinearVelocity = Vector3.zero end
 
@@ -531,6 +514,8 @@ if gameplayFolder then
                         FlingActive = false
                         selectedPlayer = nil
                     end
+
+                    isAutoFarmActive = true
                 end
             end
         end)
@@ -579,15 +564,17 @@ end
 
 task.spawn(function()
     while task.wait(0.05) do
-        currentTarget = chercherMeilleurCoin()
+        if isAutoFarmActive then
+            currentTarget = chercherMeilleurCoin()
+        end
     end
 end)
 
 --------------------------------------------------------------------------------
--- AUTOFARM PERMANENT ET STABLE (VERROUILLAGE SANS CHUTE DANS LE VIDE)
+-- AUTOFARM EN LIGNE DROITE (-4 STUDS ➔ TP 0 STUD + PAUSE 50MS ➔ -4 STUDS)
 --------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function(dt)
-    if isCollecting or not character or not rootPart or not humanoid or humanoid.Health <= 0 then return end
+    if not isAutoFarmActive or isCollecting or not character or not rootPart or not humanoid then return end
 
     if currentTarget and currentTarget.Part and currentTarget.Part.Parent then
         humanoid.PlatformStand = true
@@ -623,7 +610,6 @@ RunService.Heartbeat:Connect(function(dt)
             rootPart.AssemblyLinearVelocity = Vector3.zero
         end
     else
-        -- Quand aucune pièce n'est présente : désactive PlatformStand et gèle le mouvement pour ne pas passer à travers le sol
         humanoid.PlatformStand = false
         rootPart.AssemblyLinearVelocity = Vector3.zero
     end
