@@ -55,12 +55,15 @@ local WEAPONS = {
     gun = "Sheriff", revolver = "Sheriff", pistol = "Sheriff", sheriffgun = "Sheriff"
 }
 
-player.CharacterAdded:Connect(function(newChar)
+local function setupCharacter(newChar)
     character = newChar
     rootPart = character:WaitForChild("HumanoidRootPart")
     humanoid = character:WaitForChild("Humanoid")
     isAutoFarmActive = true
-end)
+    isCollecting = false
+end
+
+player.CharacterAdded:Connect(setupCharacter)
 
 --------------------------------------------------------------------------------
 -- ANTI-AFK INTÉGRÉ
@@ -249,31 +252,19 @@ CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
 end)
 
 --------------------------------------------------------------------------------
--- WATCHDOG : VERIFICATION DE L'ACTIVATION DE L'AUTOFARM & DU MOVEMENT (1 MIN)
+-- WATCHDOG : SÉCURISATION PERMANENTE DE L'ETAT ACTIVÉ
 --------------------------------------------------------------------------------
 task.spawn(function()
-    while task.wait(1) do
-        -- 1. Force l'activation si désactivé
+    while task.wait(0.5) do
         if not isAutoFarmActive then
             isAutoFarmActive = true
         end
-    end
-end)
-
--- Vérification active du mouvement Fly toutes les 60 secondes (1 min)
-task.spawn(function()
-    while task.wait(60) do
-        if isAutoFarmActive then
-            local currentPos = rootPart and rootPart.Position
-            task.wait(2)
-            local newPos = rootPart and rootPart.Position
-
-            -- Si le joueur ne s'est pas déplacé malgré l'AutoFarm actif, relance le Fly
-            if currentPos and newPos and (newPos - currentPos).Magnitude < 1 then
-                print("[Watchdog] Relance forcée du Fly/AutoFarm...")
-                if humanoid then humanoid.PlatformStand = true end
-                currentTarget = nil
-            end
+        
+        -- Sécurité anti-blocage d'état de collecte
+        if isCollecting then
+            task.delay(0.2, function()
+                isCollecting = false
+            end)
         end
     end
 end)
@@ -332,15 +323,10 @@ local function getCoinPart(obj)
 end
 
 --------------------------------------------------------------------------------
--- NOCLIP PERMANENT & RÉACTIVATION À LA MORT
+-- NOCLIP PERMANENT
 --------------------------------------------------------------------------------
 RunService.Stepped:Connect(function()
     if character then
-        local hum = character:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health <= 0 then
-            isAutoFarmActive = true
-        end
-
         for _, part in ipairs(character:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -624,7 +610,7 @@ task.spawn(function()
 end)
 
 --------------------------------------------------------------------------------
--- AUTOFARM EN LIGNE DROITE (-4 STUDS ➔ TP 0 STUD + PAUSE 50MS ➔ -4 STUDS)
+-- AUTOFARM CONTINU ET STABLE (SANS DÉSACTIVATION DE PLATFORMSTAND)
 --------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function(dt)
     if not isAutoFarmActive or isCollecting or not character or not rootPart or not humanoid then return end
@@ -663,7 +649,8 @@ RunService.Heartbeat:Connect(function(dt)
             rootPart.AssemblyLinearVelocity = Vector3.zero
         end
     else
-        humanoid.PlatformStand = false
+        -- L'AutoFarm reste actif en l'air même si aucune pièce n'est ciblée temporairement
+        if humanoid then humanoid.PlatformStand = true end
         rootPart.AssemblyLinearVelocity = Vector3.zero
     end
 end)
