@@ -33,7 +33,6 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 local humanoid = character:WaitForChild("Humanoid")
 
 -- Variables d'état
-local isAutoFarmActive = true
 local FlingActive = false
 local selectedPlayer = nil
 getgenv().OldPos = nil
@@ -59,7 +58,6 @@ local function setupCharacter(newChar)
     character = newChar
     rootPart = character:WaitForChild("HumanoidRootPart")
     humanoid = character:WaitForChild("Humanoid")
-    isAutoFarmActive = true
     isCollecting = false
 end
 
@@ -252,24 +250,6 @@ CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
 end)
 
 --------------------------------------------------------------------------------
--- WATCHDOG : SÉCURISATION PERMANENTE DE L'ETAT ACTIVÉ
---------------------------------------------------------------------------------
-task.spawn(function()
-    while task.wait(0.5) do
-        if not isAutoFarmActive then
-            isAutoFarmActive = true
-        end
-        
-        -- Sécurité anti-blocage d'état de collecte
-        if isCollecting then
-            task.delay(0.2, function()
-                isCollecting = false
-            end)
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
 -- BOUCLE DE STATISTIQUES & TIMERS
 --------------------------------------------------------------------------------
 local aloneTimer = 0
@@ -323,10 +303,10 @@ local function getCoinPart(obj)
 end
 
 --------------------------------------------------------------------------------
--- NOCLIP PERMANENT
+-- NOCLIP SÉCURISÉ (SEULEMENT PENDANT LE DEPLACEMENT COIN)
 --------------------------------------------------------------------------------
 RunService.Stepped:Connect(function()
-    if character then
+    if character and currentTarget and currentTarget.Part then
         for _, part in ipairs(character:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -529,14 +509,12 @@ if gameplayFolder then
                 local amIMurderer = isPlayerMurderer(player)
 
                 if amIMurderer then
-                    isAutoFarmActive = false
                     if character then
                         local hum = character:FindFirstChildOfClass("Humanoid")
                         if hum then hum.Health = 0 end
                         character:BreakJoints()
                     end
                 else
-                    isAutoFarmActive = false
                     if humanoid then humanoid.PlatformStand = false end
                     if rootPart then rootPart.AssemblyLinearVelocity = Vector3.zero end
 
@@ -553,8 +531,6 @@ if gameplayFolder then
                         FlingActive = false
                         selectedPlayer = nil
                     end
-
-                    isAutoFarmActive = true
                 end
             end
         end)
@@ -603,17 +579,15 @@ end
 
 task.spawn(function()
     while task.wait(0.05) do
-        if isAutoFarmActive then
-            currentTarget = chercherMeilleurCoin()
-        end
+        currentTarget = chercherMeilleurCoin()
     end
 end)
 
 --------------------------------------------------------------------------------
--- AUTOFARM CONTINU ET STABLE (SANS DÉSACTIVATION DE PLATFORMSTAND)
+-- AUTOFARM PERMANENT ET STABLE (VERROUILLAGE SANS CHUTE DANS LE VIDE)
 --------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function(dt)
-    if not isAutoFarmActive or isCollecting or not character or not rootPart or not humanoid then return end
+    if isCollecting or not character or not rootPart or not humanoid or humanoid.Health <= 0 then return end
 
     if currentTarget and currentTarget.Part and currentTarget.Part.Parent then
         humanoid.PlatformStand = true
@@ -649,8 +623,8 @@ RunService.Heartbeat:Connect(function(dt)
             rootPart.AssemblyLinearVelocity = Vector3.zero
         end
     else
-        -- L'AutoFarm reste actif en l'air même si aucune pièce n'est ciblée temporairement
-        if humanoid then humanoid.PlatformStand = true end
+        -- Quand aucune pièce n'est présente : désactive PlatformStand et gèle le mouvement pour ne pas passer à travers le sol
+        humanoid.PlatformStand = false
         rootPart.AssemblyLinearVelocity = Vector3.zero
     end
 end)
