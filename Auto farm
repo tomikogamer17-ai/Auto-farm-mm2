@@ -41,13 +41,17 @@ getgenv().FPDH = Workspace.FallenPartsDestroyHeight
 
 local coinsBlacklist = {}
 local currentTarget = nil
-local flySpeed = 20
+local flySpeed = 21 -- Vitesse augmentée à 21
 local isCollecting = false
 
 -- Statistiques, Compteurs & Timers
 local totalCoinsCollected = 0
 local startTime = tick()
 local lastCoinSpawnTime = tick()
+local lastMovementTime = tick()
+local lastPosition = rootPart.Position
+local currentBagCoins = 0
+local initialFlingDone = false
 
 local playerRoles = {}
 local WEAPONS = {
@@ -55,12 +59,19 @@ local WEAPONS = {
     gun = "Sheriff", revolver = "Sheriff", pistol = "Sheriff", sheriffgun = "Sheriff"
 }
 
-player.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    rootPart = character:WaitForChild("HumanoidRootPart")
-    humanoid = character:WaitForChild("Humanoid")
-    isAutoFarmActive = true
-end)
+--------------------------------------------------------------------------------
+-- POSITIONNEMENT AU SPAWN À -4 STUDS DU SOL
+--------------------------------------------------------------------------------
+local function spawnAtMinusFour(char)
+    local root = char:WaitForChild("HumanoidRootPart", 5)
+    if root then
+        task.wait(0.1)
+        root.CFrame = CFrame.new(root.Position.X, root.Position.Y - 4, root.Position.Z)
+        root.AssemblyLinearVelocity = Vector3.zero
+    end
+end
+
+if character then spawnAtMinusFour(character) end
 
 --------------------------------------------------------------------------------
 -- ANTI-AFK INTÉGRÉ
@@ -71,9 +82,9 @@ player.Idled:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE (UI SÉCURISÉE)
+-- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE
 --------------------------------------------------------------------------------
-local MainGui = {}
+MainGui = {}
 
 MainGui["1"] = Instance.new("ScreenGui")
 if gethui then
@@ -87,7 +98,9 @@ MainGui["1"]["ScreenInsets"] = Enum.ScreenInsets.DeviceSafeInsets
 MainGui["1"]["ZIndexBehavior"] = Enum.ZIndexBehavior.Sibling
 MainGui["1"]["ResetOnSpawn"] = false
 
+-- Cadre Principal
 MainGui["2"] = Instance.new("ImageLabel", MainGui["1"])
+MainGui["2"]["Name"] = "NexusMainFrame"
 MainGui["2"]["BorderSizePixel"] = 0
 MainGui["2"]["BackgroundColor3"] = Color3.fromRGB(255, 255, 255)
 MainGui["2"]["Image"] = "rbxassetid://130647873334585"
@@ -146,7 +159,34 @@ ReasonLabel["TextSize"] = 14
 ReasonLabel["TextColor3"] = Color3.fromRGB(255, 170, 0)
 ReasonLabel["Text"] = ""
 
--- Système Drag & Drop
+--------------------------------------------------------------------------------
+-- LOGO BLEU "NEXUS" & SYSTEME DE RÉDUCTION DE L'UI
+--------------------------------------------------------------------------------
+local LogoBtn = Instance.new("TextButton", MainGui["1"])
+LogoBtn.Name = "NexusLogo"
+LogoBtn.Size = UDim2.new(0, 75, 0, 30)
+LogoBtn.Position = UDim2.new(0.02, 0, 0.15, 0)
+LogoBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+LogoBtn.BorderSizePixel = 0
+LogoBtn.Font = Enum.Font.GothamBold
+LogoBtn.Text = "Nexus"
+LogoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+LogoBtn.TextSize = 13
+
+local LogoCorner = Instance.new("UICorner", LogoBtn)
+LogoCorner.CornerRadius = UDim.new(0, 8)
+
+local LogoStroke = Instance.new("UIStroke", LogoBtn)
+LogoStroke.Color = Color3.fromRGB(255, 255, 255)
+LogoStroke.Thickness = 1.2
+
+local isUIMinimized = false
+LogoBtn.MouseButton1Click:Connect(function()
+    isUIMinimized = not isUIMinimized
+    MainGui["2"].Visible = not isUIMinimized
+end)
+
+-- Drag & Drop Interface
 local Dragging = false
 local DragStart, StartPos
 
@@ -177,7 +217,7 @@ UserInputService.InputChanged:Connect(function(Input)
 end)
 
 --------------------------------------------------------------------------------
--- FONCTION SERVEUR HOP AVEC LOGS DE RAISON
+-- FONCTION SERVEUR HOP
 --------------------------------------------------------------------------------
 local function serverHop(raison)
     local reasonText = raison or "Changement de serveur manuel"
@@ -189,7 +229,7 @@ local function serverHop(raison)
         ReasonLabel.Text = "Server Hop: " .. reasonText
     end
 
-    local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+    local ApiUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
     local success, result = pcall(function()
         return HttpService:JSONDecode(game:HttpGet(ApiUrl))
     end)
@@ -197,7 +237,7 @@ local function serverHop(raison)
     if success and result and result.data then
         local validServers = {}
         for _, s in ipairs(result.data) do
-            if type(s) == "table" and s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing > 1 then
+            if type(s) == "table" and s.id ~= game.JobId and s.playing < (s.maxPlayers or 12) and s.playing > 1 then
                 table.insert(validServers, s.id)
             end
         end
@@ -224,7 +264,7 @@ CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
 end)
 
 --------------------------------------------------------------------------------
--- BOUCLE DE STATISTIQUES & TIMERS
+-- BOUCLE DE STATISTIQUES & TIMERS (500S MOUVEMENT)
 --------------------------------------------------------------------------------
 local aloneTimer = 0
 
@@ -249,6 +289,19 @@ task.spawn(function()
             MainGui["4"].Text = "0"
         end
 
+        -- Verification Mouvement du Personnage (500s)
+        if rootPart then
+            local currentPos = rootPart.Position
+            if (currentPos - lastPosition).Magnitude > 2 then
+                lastMovementTime = tick()
+                lastPosition = currentPos
+            end
+        end
+
+        if (tick() - lastMovementTime) >= 300 then
+            serverHop("Aucun mouvement détecté pendant 300s")
+        end
+
         -- Server Hop si pas de pièce depuis +180 secondes
         if (tick() - lastCoinSpawnTime) >= 180 then
             serverHop("Aucune pièce détectée pendant 180s")
@@ -257,8 +310,8 @@ task.spawn(function()
         -- Server Hop si seul pendant 10 secondes
         if #Players:GetPlayers() <= 1 then
             aloneTimer = aloneTimer + 1
-            if aloneTimer >= 10 then
-                serverHop("Seul sur le serveur pendant 10s")
+            if aloneTimer >= 60 then
+                serverHop("Seul sur le serveur pendant 60s")
             end
         else
             aloneTimer = 0
@@ -277,17 +330,10 @@ local function getCoinPart(obj)
 end
 
 --------------------------------------------------------------------------------
--- NOCLIP PERMANENT & RÉACTIVATION À LA MORT
+-- NOCLIP PERMANENT
 --------------------------------------------------------------------------------
 RunService.Stepped:Connect(function()
     if character then
-        local hum = character:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health <= 0 then
-            if not isAutoFarmActive then
-                isAutoFarmActive = true
-            end
-        end
-
         for _, part in ipairs(character:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -420,7 +466,7 @@ local function SkidFling(TargetPlayer)
 end
 
 --------------------------------------------------------------------------------
--- DÉTECTION RIGOUREUSE DU RÔLE MURDERER & RESET
+-- DÉTECTION RIGOUREUSE DU RÔLE MURDERER & RESET / FLING LOGIC
 --------------------------------------------------------------------------------
 local function checkInventory(targetPlayer)
     local targetChar = targetPlayer.Character
@@ -469,6 +515,41 @@ local function findMurderer()
     return nil
 end
 
+local function executeMurdererFling()
+    local murderer = findMurderer()
+    if murderer then
+        FlingActive = true
+        selectedPlayer = murderer.Name
+        SkidFling(murderer)
+        FlingActive = false
+        selectedPlayer = nil
+    end
+end
+
+-- FLING INITIAL AU LANCEMENT DU SCRIPT (1 FOIS)
+task.spawn(function()
+    if not initialFlingDone then
+        initialFlingDone = true
+        task.wait(2)
+        executeMurdererFling()
+    end
+end)
+
+-- RESPAWN & DEATH FLING LOGIC
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    humanoid = character:WaitForChild("Humanoid")
+    isAutoFarmActive = true
+    spawnAtMinusFour(newChar)
+
+    if currentBagCoins < 50 then
+        task.wait(2)
+        executeMurdererFling()
+    end
+    currentBagCoins = 0
+end)
+
 local gameplayFolder = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Gameplay")
 if gameplayFolder then
     local showRoleSelectNew = gameplayFolder:FindFirstChild("ShowRoleSelectNew")
@@ -485,6 +566,7 @@ if gameplayFolder then
         coinCollectedRemote.OnClientEvent:Connect(function(coinType, currentCoins, maxCoins)
             totalCoinsCollected = totalCoinsCollected + 1
             lastCoinSpawnTime = tick()
+            currentBagCoins = currentCoins
 
             if currentCoins >= maxCoins or currentCoins >= 50 then
                 local amIMurderer = isPlayerMurderer(player)
@@ -506,15 +588,7 @@ if gameplayFolder then
                         task.wait(0.2)
                     end
 
-                    local murderer = findMurderer()
-                    if murderer then
-                        FlingActive = true
-                        selectedPlayer = murderer.Name
-                        SkidFling(murderer)
-                        FlingActive = false
-                        selectedPlayer = nil
-                    end
-
+                    executeMurdererFling()
                     isAutoFarmActive = true
                 end
             end
@@ -571,7 +645,7 @@ task.spawn(function()
 end)
 
 --------------------------------------------------------------------------------
--- AUTOFARM EN LIGNE DROITE (-4 STUDS ➔ TP 0 STUD + PAUSE 50MS ➔ -4 STUDS)
+-- AUTOFARM A VITESSE 21 & ANCRAGE SOLIDE (PLATEFORME VIRTUELLE SANS CHUTE)
 --------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function(dt)
     if not isAutoFarmActive or isCollecting or not character or not rootPart or not humanoid then return end
@@ -610,7 +684,9 @@ RunService.Heartbeat:Connect(function(dt)
             rootPart.AssemblyLinearVelocity = Vector3.zero
         end
     else
-        humanoid.PlatformStand = false
+        -- Ancrage total sur place : maintient à -4 studs exacts sans aucune gravité
+        humanoid.PlatformStand = true
         rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.RotVelocity = Vector3.zero
     end
 end)
