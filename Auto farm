@@ -122,6 +122,102 @@ end
 for _, p in ipairs(Players:GetPlayers()) do applyNexusTag(p) end
 Players.PlayerAdded:Connect(applyNexusTag)
 
+
+--------------------------------------------------
+-- NEXUS FPS OPTIMIZER + FPS UNLOCK
+-- Activation automatique
+--------------------------------------------------
+
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local Terrain = Workspace:FindFirstChildOfClass("Terrain")
+
+--------------------------------------------------
+-- CONFIGURATION
+--------------------------------------------------
+
+local TARGET_FPS = 100000
+
+--------------------------------------------------
+-- FPS BOOST
+--------------------------------------------------
+
+local function optimizeObject(obj)
+    if obj:IsA("BasePart") then
+        obj.Material = Enum.Material.SmoothPlastic
+        obj.Reflectance = 0
+
+    elseif obj:IsA("Texture") or obj:IsA("Decal") then
+        obj.Transparency = 1
+
+    elseif obj:IsA("ParticleEmitter")
+        or obj:IsA("Trail")
+        or obj:IsA("Smoke")
+        or obj:IsA("Fire") then
+        obj.Enabled = false
+
+    elseif obj:IsA("PostEffect") then
+        obj.Enabled = false
+    end
+end
+
+local function enableFPSBoost()
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+    Lighting.Brightness = 2
+
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        if obj:IsA("PostEffect") then
+            obj.Enabled = false
+        end
+    end
+
+    if Terrain then
+        Terrain.WaterWaveSize = 0
+        Terrain.WaterWaveSpeed = 0
+        Terrain.WaterReflectance = 0
+        Terrain.WaterTransparency = 1
+    end
+
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        optimizeObject(obj)
+    end
+
+    settings().Rendering.QualityLevel =
+        Enum.QualityLevel.Level01
+
+    print("[NEXUS] FPS Boost activé")
+end
+
+-- Activation immédiate
+enableFPSBoost()
+
+-- Optimiser les nouveaux objets et les nouvelles maps
+Workspace.DescendantAdded:Connect(function(obj)
+    optimizeObject(obj)
+end)
+
+--------------------------------------------------
+-- FPS UNLOCK
+--------------------------------------------------
+
+if type(setfpscap) == "function" then
+    local success, err = pcall(function()
+        setfpscap(TARGET_FPS)
+    end)
+
+    if success then
+        print("[NEXUS] Limite FPS réglée sur " .. TARGET_FPS)
+    else
+        warn("[NEXUS] Erreur FPS Unlock :", err)
+    end
+else
+    warn("[NEXUS] setfpscap indisponible")
+end
+
+print("[NEXUS] Optimizer entièrement lancé")
+
+
 --------------------------------------------------------------------------------
 -- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE
 --------------------------------------------------------------------------------
