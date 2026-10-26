@@ -82,6 +82,47 @@ player.Idled:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
+-- DÉTECTION NEXUS USER SUR LES AUTRES JOUEURS
+--------------------------------------------------------------------------------
+local function applyNexusTag(otherPlayer)
+    if otherPlayer == player then return end
+    
+    local function checkAndAddTag(targetChar)
+        if not targetChar then return end
+        local head = targetChar:WaitForChild("Head", 5)
+        if not head or head:FindFirstChild("NexusTag") then return end
+
+        if otherPlayer:GetAttribute("NexusUser") or targetChar:GetAttribute("NexusUser") then
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "NexusTag"
+            bb.Adornee = head
+            bb.Size = UDim2.new(0, 120, 0, 30)
+            bb.StudsOffset = Vector3.new(0, 2.5, 0)
+            bb.AlwaysOnTop = true
+            bb.Parent = head
+
+            local label = Instance.new("TextLabel", bb)
+            label.Size = UDim2.new(1, 0, 1, 0)
+            label.BackgroundTransparency = 1
+            label.Text = "Nexus user"
+            label.Font = Enum.Font.GothamBold
+            label.TextSize = 14
+            label.TextColor3 = Color3.fromRGB(180, 100, 255)
+            label.TextStrokeTransparency = 0.2
+        end
+    end
+
+    if otherPlayer.Character then checkAndAddTag(otherPlayer.Character) end
+    otherPlayer.CharacterAdded:Connect(checkAndAddTag)
+    otherPlayer:GetAttributeChangedSignal("NexusUser"):Connect(function()
+        if otherPlayer.Character then checkAndAddTag(otherPlayer.Character) end
+    end)
+end
+
+for _, p in ipairs(Players:GetPlayers()) do applyNexusTag(p) end
+Players.PlayerAdded:Connect(applyNexusTag)
+
+--------------------------------------------------------------------------------
 -- CRÉATION ET GESTION DE L'INTERFACE GRAPHIQUE
 --------------------------------------------------------------------------------
 MainGui = {}
