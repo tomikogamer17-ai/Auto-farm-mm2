@@ -41,7 +41,7 @@ getgenv().FPDH = Workspace.FallenPartsDestroyHeight
 
 local coinsBlacklist = {}
 local currentTarget = nil
-local flySpeed = 21 -- Vitesse augmentée à 21
+local flySpeed = 22
 local isCollecting = false
 
 -- Statistiques, Compteurs & Timers
